@@ -11,7 +11,7 @@ export default function DicomConverter() {
   const [selectedFormat, setSelectedFormat] = useState('');
   const [status, setStatus] = useState('');
   const [downloadUrl, setDownloadUrl] = useState('');
-  const ffmpegRef = useRef(new FFmpeg());
+  const ffmpegRef = useRef(null);
 
   const handleFileUpload = async (e) => {
     const uploadedFile = e.target.files[0];
@@ -43,6 +43,9 @@ export default function DicomConverter() {
   };
 
   const loadFFmpeg = async () => {
+    if (!ffmpegRef.current) {
+      ffmpegRef.current = new FFmpeg();
+    }
     const ffmpeg = ffmpegRef.current;
     if (!ffmpeg.loaded) {
       setStatus('Loading conversion engine...');
