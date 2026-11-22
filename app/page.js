@@ -507,7 +507,7 @@ export default function CardioDicomSaaS() {
         </div>
       )}
 
-      {/* 2-Column Hero Section with High-Res Cardio Banner Images */}
+      {/* 2-Column Hero Section with Single Cardiovisual Engine Banner */}
       <section style={{ maxWidth: '1140px', margin: '0 auto', padding: '44px 24px 36px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(330px, 1fr))', gap: '40px', alignItems: 'center' }}>
         
         {/* Left Column: Headline & CTA */}
@@ -547,24 +547,10 @@ export default function CardioDicomSaaS() {
           </div>
         </div>
 
-        {/* Right Column: High-Res Rendered Cardio Banners */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          
-          {/* Top Banner: Echo Scan Preview */}
-          <div style={{ position: 'relative', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 20px 35px -10px rgba(15, 23, 42, 0.35)', border: '1px solid #1e293b', backgroundColor: '#081020' }}>
-            <div style={{ position: 'absolute', top: '12px', left: '16px', zIndex: 2, fontSize: '11px', fontWeight: '800', letterSpacing: '0.08em', color: '#ffffff', textShadow: '0 2px 6px rgba(0,0,0,0.85)' }}>
-              ECHO SCAN PREVIEW
-            </div>
-            <img
-              src="/echo-preview.png"
-              alt="Echo Scan Preview Workstation"
-              style={{ width: '100%', height: 'auto', display: 'block' }}
-            />
-          </div>
-
-          {/* Bottom Banner: Cardiovisual Engine */}
+        {/* Right Column: Single Cardiovisual Engine Banner */}
+        <div>
           <div style={{ position: 'relative', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 20px 35px -10px rgba(15, 23, 42, 0.35)', border: '1px solid #1e293b', backgroundColor: '#070e1a' }}>
-            <div style={{ position: 'absolute', top: '14px', left: '18px', zIndex: 2, fontSize: '11px', fontWeight: '800', letterSpacing: '0.08em', color: '#ffffff', textShadow: '0 2px 6px rgba(0,0,0,0.85)' }}>
+            <div style={{ position: 'absolute', top: '16px', left: '20px', zIndex: 2, fontSize: '12px', fontWeight: '800', letterSpacing: '0.08em', color: '#ffffff', textShadow: '0 2px 6px rgba(0,0,0,0.85)' }}>
               CARDIOVISUAL ENGINE
             </div>
             <img
@@ -573,8 +559,8 @@ export default function CardioDicomSaaS() {
               style={{ width: '100%', height: 'auto', display: 'block' }}
             />
           </div>
-
         </div>
+
       </section>
 
       {/* Interactive Batch Converter Section */}
