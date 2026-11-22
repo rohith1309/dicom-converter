@@ -12,7 +12,6 @@ export default function CardioDicomSaaS() {
   const [authNotice, setAuthNotice] = useState('');
 
   // Batch DICOM Converter State
-  // Each item: { id, file, name, sizeMB, isVideo, frameCount, dimensions, encodingInfo, format, status, progress, downloadUrl, error }
   const [queue, setQueue] = useState([]);
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
   const [defaultVideoFormat, setDefaultVideoFormat] = useState('mp4');
@@ -61,7 +60,7 @@ export default function CardioDicomSaaS() {
             dimensions: `${cols} × ${rows} px`,
             encodingInfo: `${isEncapsulated ? 'Compressed JPEG' : 'Raw'} • ${photometric}`,
             format: isVideo ? defaultVideoFormat : 'jpeg',
-            status: 'ready', // 'ready' | 'converting' | 'done' | 'error'
+            status: 'ready',
             statusText: 'Ready',
             progress: 0,
             downloadUrl: '',
@@ -157,7 +156,6 @@ export default function CardioDicomSaaS() {
     return ffmpeg;
   };
 
-  // Convert a single queue item
   const convertSingleItem = async (item) => {
     const updatePatch = (patch) => {
       setQueue((prev) => prev.map((q) => (q.id === item.id ? { ...q, ...patch } : q)));
@@ -336,7 +334,6 @@ export default function CardioDicomSaaS() {
         });
       };
 
-      // Single-frame JPEG output
       if (!item.isVideo || item.format === 'jpeg') {
         updatePatch({ statusText: 'Rendering JPEG...', progress: 65 });
         const jpegBlob = await renderFrameToBlob(0);
@@ -350,7 +347,6 @@ export default function CardioDicomSaaS() {
         return;
       }
 
-      // Multi-frame Video output (MP4 / AVI / MPEG)
       updatePatch({ statusText: 'Loading encoder...', progress: 15 });
       const ffmpeg = await loadFFmpeg();
 
@@ -400,7 +396,6 @@ export default function CardioDicomSaaS() {
         type: mimeMap[item.format] || 'video/mp4',
       });
 
-      // Clean up virtual FFmpeg files to save RAM during 10+ file batches
       for (let f = 0; f < item.frameCount; f++) {
         try {
           await ffmpeg.deleteFile(`frame_${String(f).padStart(4, '0')}.jpg`);
@@ -427,7 +422,6 @@ export default function CardioDicomSaaS() {
     }
   };
 
-  // Sequentially convert all ready files in the batch queue
   const handleConvertAll = async () => {
     if (isBatchProcessing) return;
     const pending = queue.filter((item) => item.status === 'ready');
@@ -440,7 +434,6 @@ export default function CardioDicomSaaS() {
     setIsBatchProcessing(false);
   };
 
-  // Trigger sequential browser downloads for all completed files
   const handleDownloadAll = () => {
     const completed = queue.filter((item) => item.status === 'done' && item.downloadUrl);
     completed.forEach((item, index) => {
@@ -514,8 +507,8 @@ export default function CardioDicomSaaS() {
         </div>
       )}
 
-      {/* 2-Column Hero Section with Right-Side Cardio Visual Banners */}
-      <section style={{ maxWidth: '1120px', margin: '0 auto', padding: '44px 24px 36px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '36px', alignItems: 'center' }}>
+      {/* 2-Column Hero Section with Realistic Clinical Workstation & 3D Mesh Heart Banners */}
+      <section style={{ maxWidth: '1140px', margin: '0 auto', padding: '44px 24px 36px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(330px, 1fr))', gap: '40px', alignItems: 'center' }}>
         
         {/* Left Column: Headline & CTA */}
         <div>
@@ -554,54 +547,161 @@ export default function CardioDicomSaaS() {
           </div>
         </div>
 
-        {/* Right Column: Cardio Echo & Visual Engine Banners */}
+        {/* Right Column: Realistic Clinical Workstation & Holographic Heart Banners */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           
-          {/* Card 1: Echo Scan Preview */}
-          <div style={{ background: 'linear-gradient(135deg, #0b162c 0%, #13294b 100%)', borderRadius: '16px', padding: '18px 20px', color: '#ffffff', boxShadow: '0 14px 30px -8px rgba(15, 23, 42, 0.25)', border: '1px solid #1e3a5f' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <span style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '0.08em', color: '#7dd3fc' }}>ECHO SCAN PREVIEW</span>
-              <span style={{ fontSize: '11px', backgroundColor: 'rgba(14, 165, 233, 0.2)', color: '#38bdf8', padding: '2px 8px', borderRadius: '999px', fontWeight: '600' }}>4-CHAMBER CINE</span>
+          {/* Banner 1: Realistic Echocardiography Workstation UI */}
+          <div style={{ background: 'linear-gradient(145deg, #0b1324 0%, #101d36 100%)', borderRadius: '16px', padding: '16px', color: '#e2e8f0', boxShadow: '0 20px 35px -10px rgba(15, 23, 42, 0.35)', border: '1px solid #1e293b' }}>
+            {/* Top Workstation Title Bar */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #1e293b', paddingBottom: '10px', marginBottom: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#38bdf8', boxShadow: '0 0 8px #38bdf8' }} />
+                <span style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '0.08em', color: '#f8fafc' }}>ECHO SCAN PREVIEW</span>
+              </div>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <span style={{ fontSize: '10px', backgroundColor: '#0f172a', border: '1px solid #334155', color: '#38bdf8', padding: '2px 8px', borderRadius: '4px', fontFamily: 'monospace' }}>60 FPS</span>
+                <span style={{ fontSize: '10px', backgroundColor: '#0284c7', color: '#ffffff', padding: '2px 8px', borderRadius: '4px', fontWeight: '700' }}>DICOM 3.0</span>
+              </div>
             </div>
-            <svg viewBox="0 0 360 120" style={{ width: '100%', height: 'auto', display: 'block', borderRadius: '10px', backgroundColor: '#060d1a' }}>
-              {/* Ultrasound Sector Cone */}
-              <path d="M180 12 L75 104 A145 145 0 0 0 285 104 Z" fill="url(#sectorGrad)" stroke="#1e3a5f" strokeWidth="1" />
-              <defs>
-                <radialGradient id="sectorGrad" cx="50%" cy="10%" r="85%">
-                  <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.45" />
-                  <stop offset="65%" stopColor="#0284c7" stopOpacity="0.18" />
-                  <stop offset="100%" stopColor="#060d1a" stopOpacity="0.9" />
-                </radialGradient>
-              </defs>
-              {/* Stylized Cardiac Chambers */}
-              <ellipse cx="165" cy="64" rx="22" ry="30" transform="rotate(-14 165 64)" fill="none" stroke="#7dd3fc" strokeWidth="2.5" opacity="0.85" />
-              <ellipse cx="202" cy="66" rx="17" ry="26" transform="rotate(14 202 66)" fill="none" stroke="#38bdf8" strokeWidth="2" opacity="0.7" />
-              {/* Live ECG Rhythm Strip at bottom */}
-              <polyline
-                fill="none"
-                stroke="#10b981"
-                strokeWidth="2"
-                points="16,108 65,108 74,102 82,108 90,108 95,84 101,115 107,96 115,108 165,108 174,102 182,108 190,108 195,84 201,115 207,96 215,108 265,108 274,102 282,108 290,108 295,84 301,115 307,96 315,108 345,108"
-              />
-            </svg>
+
+            {/* Inner 3-Column Workstation Grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: '68px 1fr 115px', gap: '10px', alignItems: 'stretch' }}>
+              
+              {/* Left Sidebar Telemetry */}
+              <div style={{ backgroundColor: '#070d19', borderRadius: '8px', padding: '8px', border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', fontSize: '9px', fontFamily: 'monospace', color: '#94a3b8' }}>
+                <div>
+                  <div style={{ color: '#38bdf8', fontWeight: '700', marginBottom: '6px' }}>PROBE</div>
+                  <div>M5Sc-D</div>
+                  <div style={{ color: '#64748b' }}>2.4 MHz</div>
+                </div>
+                <div>
+                  <div style={{ color: '#10b981', fontWeight: '700', marginBottom: '4px' }}>VITALS</div>
+                  <div>HR: 72 bpm</div>
+                  <div>MI: 0.9</div>
+                  <div>TIS: 0.4</div>
+                </div>
+                <div style={{ backgroundColor: '#0f172a', padding: '4px', borderRadius: '4px', textAlign: 'center', color: '#7dd3fc', border: '1px solid #1e3a5f' }}>
+                  A4C VIEW
+                </div>
+              </div>
+
+              {/* Center Ultrasound Sector + Holographic Heart + Scrubber */}
+              <div style={{ backgroundColor: '#050912', borderRadius: '8px', border: '1px solid #1e293b', padding: '8px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                <svg viewBox="0 0 220 135" style={{ width: '100%', height: 'auto', display: 'block' }}>
+                  <defs>
+                    <radialGradient id="echoBeam" cx="50%" cy="6%" r="92%">
+                      <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.42" />
+                      <stop offset="55%" stopColor="#0369a1" stopOpacity="0.16" />
+                      <stop offset="100%" stopColor="#050912" stopOpacity="0.95" />
+                    </radialGradient>
+                    <linearGradient id="heartGlow" x1="0%" y1="0%" x2="100%" y2="100%">
+                      <stop offset="0%" stopColor="#7dd3fc" />
+                      <stop offset="50%" stopColor="#0ea5e9" />
+                      <stop offset="100%" stopColor="#2563eb" />
+                    </linearGradient>
+                  </defs>
+
+                  {/* Ultrasound Sector Cone & Depth Ticks */}
+                  <path d="M110 8 L24 114 A135 135 0 0 0 196 114 Z" fill="url(#echoBeam)" stroke="#1e3a5f" strokeWidth="1" />
+                  <path d="M68 60 A65 65 0 0 0 152 60" fill="none" stroke="#1e293b" strokeWidth="0.8" strokeDasharray="3,3" />
+                  <path d="M46 88 A100 100 0 0 0 174 88" fill="none" stroke="#1e293b" strokeWidth="0.8" strokeDasharray="3,3" />
+
+                  {/* Detailed Anatomical Chambers & Septum */}
+                  <path d="M108 32 C88 45, 82 78, 96 98 C104 106, 114 104, 115 88 L112 36 Z" fill="rgba(14,165,233,0.25)" stroke="url(#heartGlow)" strokeWidth="1.8" />
+                  <path d="M117 36 C132 48, 138 75, 126 95 C120 102, 115 98, 115 88 Z" fill="rgba(56,189,248,0.18)" stroke="#38bdf8" strokeWidth="1.5" />
+                  {/* Valve Leaflets & Color Doppler Jet */}
+                  <ellipse cx="106" cy="74" rx="8" ry="13" fill="rgba(244,63,94,0.35)" stroke="#fb7185" strokeWidth="1" />
+                  <line x1="96" y1="72" x2="113" y2="72" stroke="#f8fafc" strokeWidth="1.5" />
+
+                  {/* Live ECG Waveform */}
+                  <polyline
+                    fill="none"
+                    stroke="#10b981"
+                    strokeWidth="1.6"
+                    points="12,126 42,126 48,121 53,126 58,126 62,108 66,132 70,117 75,126 115,126 121,121 126,126 131,126 135,108 139,132 143,117 148,126 188,126 194,121 199,126 208,126"
+                  />
+                </svg>
+
+                {/* Playback Timeline Bar */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px', paddingTop: '6px', borderTop: '1px solid #1e293b' }}>
+                  <span style={{ fontSize: '9px', color: '#38bdf8' }}>▶</span>
+                  <div style={{ flex: 1, height: '4px', backgroundColor: '#1e293b', borderRadius: '999px', position: 'relative' }}>
+                    <div style={{ width: '64%', height: '100%', backgroundColor: '#0ea5e9', borderRadius: '999px' }} />
+                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#ffffff', position: 'absolute', top: '-2px', left: '62%' }} />
+                  </div>
+                  <span style={{ fontSize: '9px', fontFamily: 'monospace', color: '#94a3b8' }}>01:48</span>
+                </div>
+              </div>
+
+              {/* Right Column: Doppler Curve & Metrics */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {/* Spectral Doppler / Strain Chart */}
+                <div style={{ backgroundColor: '#070d19', borderRadius: '8px', padding: '8px', border: '1px solid #1e293b', flex: 1 }}>
+                  <div style={{ fontSize: '9px', fontWeight: '700', color: '#7dd3fc', marginBottom: '4px' }}>STRAIN CURVE</div>
+                  <svg viewBox="0 0 100 52" style={{ width: '100%', height: 'auto', display: 'block' }}>
+                    <line x1="0" y1="44" x2="100" y2="44" stroke="#1e293b" strokeWidth="1" />
+                    <path d="M4 44 Q 24 42, 42 10 T 80 38 L 96 44 Z" fill="rgba(16, 185, 129, 0.25)" stroke="#10b981" strokeWidth="1.5" />
+                  </svg>
+                </div>
+
+                {/* Clinical Measurement Table */}
+                <div style={{ backgroundColor: '#070d19', borderRadius: '8px', padding: '8px', border: '1px solid #1e293b', fontSize: '9px', fontFamily: 'monospace' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <span style={{ color: '#94a3b8' }}>LVEF</span>
+                    <span style={{ color: '#10b981', fontWeight: '700' }}>62.4%</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <span style={{ color: '#94a3b8' }}>GLS</span>
+                    <span style={{ color: '#38bdf8', fontWeight: '700' }}>-20.1%</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: '#94a3b8' }}>E/A</span>
+                    <span style={{ color: '#f8fafc', fontWeight: '700' }}>1.35</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
-          {/* Card 2: Cardiovisual Engine */}
-          <div style={{ background: 'linear-gradient(135deg, #090d16 0%, #172033 100%)', borderRadius: '16px', padding: '18px 20px', color: '#ffffff', boxShadow: '0 14px 30px -8px rgba(15, 23, 42, 0.25)', border: '1px solid #1e293b', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px' }}>
-            <div>
-              <div style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '0.08em', color: '#38bdf8', marginBottom: '6px' }}>
+          {/* Banner 2: Holographic 3D Wireframe Heart Engine Card */}
+          <div style={{ background: 'linear-gradient(125deg, #07131f 0%, #0d1b2a 55%, #2a0e18 100%)', borderRadius: '16px', padding: '18px 20px', color: '#ffffff', boxShadow: '0 20px 35px -10px rgba(15, 23, 42, 0.35)', border: '1px solid #1e293b', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', overflow: 'hidden', position: 'relative' }}>
+            <div style={{ zIndex: 2, maxWidth: '64%' }}>
+              <div style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '0.1em', color: '#38bdf8', marginBottom: '6px' }}>
                 CARDIOVISUAL ENGINE
               </div>
-              <div style={{ fontSize: '15px', fontWeight: '700', color: '#f8fafc', marginBottom: '4px' }}>
-                Multi-File DICOM Batch Queue
+              <div style={{ fontSize: '16px', fontWeight: '700', color: '#f8fafc', marginBottom: '4px' }}>
+                Holographic Cine &amp; Still Decoder
               </div>
-              <div style={{ fontSize: '12px', color: '#94a3b8', lineHeight: '1.5' }}>
-                Auto-detects cine frames vs. still scans and exports each file in its native format.
+              <div style={{ fontSize: '12px', color: '#cbd5e1', lineHeight: '1.5' }}>
+                Decodes compressed JPEG &amp; YBR color Doppler streams directly into MP4, AVI, MPEG, or JPEG.
               </div>
             </div>
-            <div style={{ width: '56px', height: '56px', borderRadius: '14px', background: 'linear-gradient(135deg, rgba(14,165,233,0.2), rgba(244,63,94,0.2))', border: '1px solid rgba(56,189,248,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '28px', flexShrink: 0 }}>
-              🫀
-            </div>
+
+            {/* Detailed Cyan/Crimson Wireframe Heart Illustration */}
+            <svg viewBox="0 0 140 120" style={{ width: '130px', height: '110px', flexShrink: 0 }}>
+              <defs>
+                <linearGradient id="meshCyan" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor="#67e8f9" />
+                  <stop offset="60%" stopColor="#0284c7" />
+                  <stop offset="100%" stopColor="#f43f5e" />
+                </linearGradient>
+              </defs>
+              {/* Aortic Arch & Great Vessels */}
+              <path d="M58 34 C58 14, 86 12, 88 32" fill="none" stroke="#38bdf8" strokeWidth="3" />
+              <line x1="66" y1="16" x2="66" y2="7" stroke="#38bdf8" strokeWidth="2.5" />
+              <line x1="74" y1="15" x2="74" y2="6" stroke="#38bdf8" strokeWidth="2.5" />
+              <line x1="81" y1="17" x2="81" y2="8" stroke="#38bdf8" strokeWidth="2.5" />
+              {/* Main Anatomical Heart Silhouette */}
+              <path d="M52 38 C32 42, 26 68, 42 88 C54 102, 72 112, 84 110 C98 106, 108 82, 100 56 C94 38, 72 32, 52 38 Z" fill="rgba(14,165,233,0.14)" stroke="url(#meshCyan)" strokeWidth="2" />
+              {/* Wireframe Latitude / Longitude Mesh Lines */}
+              <path d="M36 62 C55 72, 82 70, 101 58" fill="none" stroke="#38bdf8" strokeWidth="0.9" opacity="0.7" />
+              <path d="M38 78 C58 88, 82 86, 98 74" fill="none" stroke="#f43f5e" strokeWidth="0.9" opacity="0.75" />
+              <path d="M48 94 C64 100, 80 98, 91 90" fill="none" stroke="#fb7185" strokeWidth="0.9" opacity="0.75" />
+              <path d="M62 36 C56 60, 62 88, 78 109" fill="none" stroke="#7dd3fc" strokeWidth="0.9" opacity="0.7" />
+              <path d="M78 36 C82 60, 84 85, 84 109" fill="none" stroke="#38bdf8" strokeWidth="0.9" opacity="0.6" />
+              {/* Coronary Vessel Branches */}
+              <path d="M64 46 L54 66 L46 82 M54 66 L66 78 L72 94" fill="none" stroke="#fb7185" strokeWidth="1.4" opacity="0.9" />
+            </svg>
           </div>
 
         </div>
@@ -642,14 +742,13 @@ export default function CardioDicomSaaS() {
             />
           </label>
 
-          {/* Batch Controls Bar (Visible when files are queued) */}
+          {/* Batch Controls Bar */}
           {queue.length > 0 && (
             <div style={{ marginTop: '18px', padding: '12px 14px', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
               <div style={{ fontSize: '13px', fontWeight: '700', color: '#0f172a' }}>
                 {queue.length} {queue.length === 1 ? 'File' : 'Files'} Queued ({doneCount} converted)
               </div>
 
-              {/* Global Video Format Switcher if any videos exist */}
               {queue.some((i) => i.isVideo) && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
                   <span style={{ color: '#64748b', fontWeight: '600' }}>All Videos:</span>
@@ -697,7 +796,6 @@ export default function CardioDicomSaaS() {
                     key={item.id}
                     style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '14px 16px' }}
                   >
-                    {/* Top Row: Filename, Metadata & Individual Format Selector */}
                     <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
                       <div style={{ minWidth: '180px', flex: 1 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -714,7 +812,6 @@ export default function CardioDicomSaaS() {
                         </div>
                       </div>
 
-                      {/* Per-file Output Format Selector & Remove Button */}
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         {item.status !== 'error' && (
                           <select
@@ -776,7 +873,6 @@ export default function CardioDicomSaaS() {
                       </div>
                     </div>
 
-                    {/* Progress Bar & Status Line */}
                     <div style={{ marginTop: '10px' }}>
                       {item.status === 'converting' && (
                         <div style={{ width: '100%', height: '5px', backgroundColor: '#e2e8f0', borderRadius: '999px', overflow: 'hidden', marginBottom: '6px' }}>
@@ -788,7 +884,6 @@ export default function CardioDicomSaaS() {
                       </div>
                     </div>
 
-                    {/* Inline Media Preview after Conversion */}
                     {item.status === 'done' && item.downloadUrl && (
                       <div style={{ marginTop: '10px' }}>
                         {item.isVideo && item.format === 'mp4' ? (
