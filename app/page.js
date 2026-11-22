@@ -11,18 +11,12 @@ export default function CardioDicomSaaS() {
   const [authPassword, setAuthPassword] = useState('');
   const [authNotice, setAuthNotice] = useState('');
 
-  // DICOM Converter State
-  const [file, setFile] = useState(null);
-  const [isVideo, setIsVideo] = useState(false);
-  const [frameCount, setFrameCount] = useState(1);
-  const [dimensions, setDimensions] = useState('');
-  const [encodingInfo, setEncodingInfo] = useState('');
-  const [selectedFormat, setSelectedFormat] = useState('');
-  const [status, setStatus] = useState('');
-  const [progress, setProgress] = useState(0);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [downloadUrl, setDownloadUrl] = useState('');
-  const [errorMsg, setErrorMsg] = useState('');
+  // Batch DICOM Converter State
+  // Each item: { id, file, name, sizeMB, isVideo, frameCount, dimensions, encodingInfo, format, status, progress, downloadUrl, error }
+  const [queue, setQueue] = useState([]);
+  const [isBatchProcessing, setIsBatchProcessing] = useState(false);
+  const [defaultVideoFormat, setDefaultVideoFormat] = useState('mp4');
+
   const ffmpegRef = useRef(null);
   const converterSectionRef = useRef(null);
 
@@ -33,50 +27,117 @@ export default function CardioDicomSaaS() {
 
   const handleAuthSubmit = (e) => {
     e.preventDefault();
-    setAuthNotice('Sign-in UI is ready. You can currently use the converter freely without an account.');
+    setAuthNotice('Sign-in UI is ready. You can currently use the batch converter freely without an account.');
   };
 
-  // DICOM Upload & Analysis
-  const handleFileUpload = async (e) => {
-    const uploadedFile = e.target.files?.[0];
-    if (!uploadedFile) return;
+  // Parse multiple uploaded DICOM files and add to queue
+  const handleFilesUpload = async (e) => {
+    const selectedFiles = Array.from(e.target.files || []);
+    if (selectedFiles.length === 0) return;
 
-    setFile(uploadedFile);
-    setDownloadUrl('');
-    setErrorMsg('');
-    setProgress(0);
-    setStatus('Reading DICOM header...');
+    const parsedItems = await Promise.all(
+      selectedFiles.map(async (uploadedFile, idx) => {
+        const id = `${Date.now()}-${idx}-${uploadedFile.name}`;
+        try {
+          const arrayBuffer = await uploadedFile.arrayBuffer();
+          const byteArray = new Uint8Array(arrayBuffer);
+          const dataSet = dicomParser.parseDicom(byteArray);
 
-    try {
-      const arrayBuffer = await uploadedFile.arrayBuffer();
-      const byteArray = new Uint8Array(arrayBuffer);
-      const dataSet = dicomParser.parseDicom(byteArray);
+          const frames = dataSet.intString('x00280008') || 1;
+          const rows = dataSet.uint16('x00280010') || 0;
+          const cols = dataSet.uint16('x00280011') || 0;
+          const photometric = (dataSet.string('x00280004') || 'MONOCHROME2').trim();
+          const pixelDataElement = dataSet.elements.x7fe00010;
+          const isEncapsulated = Boolean(pixelDataElement?.encapsulatedPixelData);
+          const isVideo = frames > 1;
 
-      const frames = dataSet.intString('x00280008') || 1;
-      const rows = dataSet.uint16('x00280010') || 0;
-      const cols = dataSet.uint16('x00280011') || 0;
-      const photometric = (dataSet.string('x00280004') || 'MONOCHROME2').trim();
-      const pixelDataElement = dataSet.elements.x7fe00010;
-      const isEncapsulated = Boolean(pixelDataElement?.encapsulatedPixelData);
+          return {
+            id,
+            file: uploadedFile,
+            name: uploadedFile.name,
+            sizeMB: (uploadedFile.size / (1024 * 1024)).toFixed(2),
+            isVideo,
+            frameCount: frames,
+            dimensions: `${cols} × ${rows} px`,
+            encodingInfo: `${isEncapsulated ? 'Compressed JPEG' : 'Raw'} • ${photometric}`,
+            format: isVideo ? defaultVideoFormat : 'jpeg',
+            status: 'ready', // 'ready' | 'converting' | 'done' | 'error'
+            statusText: 'Ready',
+            progress: 0,
+            downloadUrl: '',
+            error: '',
+          };
+        } catch (err) {
+          return {
+            id,
+            file: uploadedFile,
+            name: uploadedFile.name,
+            sizeMB: (uploadedFile.size / (1024 * 1024)).toFixed(2),
+            isVideo: false,
+            frameCount: 0,
+            dimensions: 'Unknown',
+            encodingInfo: 'Invalid DICOM',
+            format: 'jpeg',
+            status: 'error',
+            statusText: 'Invalid DICOM file',
+            progress: 0,
+            downloadUrl: '',
+            error: 'Could not parse DICOM header.',
+          };
+        }
+      })
+    );
 
-      setFrameCount(frames);
-      setDimensions(`${cols} × ${rows} px`);
-      setEncodingInfo(`${isEncapsulated ? 'Compressed JPEG' : 'Raw'} • ${photometric}`);
+    setQueue((prev) => [...prev, ...parsedItems]);
+    e.target.value = '';
+  };
 
-      if (frames > 1) {
-        setIsVideo(true);
-        setSelectedFormat('mp4');
-        setStatus('Ready to convert multi-frame DICOM cine loop.');
-      } else {
-        setIsVideo(false);
-        setSelectedFormat('jpeg');
-        setStatus('Ready to convert single-frame DICOM image.');
-      }
-    } catch (err) {
-      setFile(null);
-      setStatus('');
-      setErrorMsg('Invalid DICOM file. Please upload a valid .dcm file.');
-    }
+  const updateItemFormat = (id, newFormat) => {
+    setQueue((prev) =>
+      prev.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              format: newFormat,
+              status: item.status === 'done' ? 'ready' : item.status,
+              statusText: item.status === 'done' ? 'Format changed — ready' : item.statusText,
+              downloadUrl: '',
+            }
+          : item
+      )
+    );
+  };
+
+  const applyFormatToAllVideos = (fmt) => {
+    setDefaultVideoFormat(fmt);
+    setQueue((prev) =>
+      prev.map((item) =>
+        item.isVideo
+          ? {
+              ...item,
+              format: fmt,
+              status: item.status === 'done' ? 'ready' : item.status,
+              statusText: item.status === 'done' ? 'Format changed — ready' : item.statusText,
+              downloadUrl: '',
+            }
+          : item
+      )
+    );
+  };
+
+  const removeQueueItem = (id) => {
+    setQueue((prev) => {
+      const target = prev.find((i) => i.id === id);
+      if (target?.downloadUrl) URL.revokeObjectURL(target.downloadUrl);
+      return prev.filter((i) => i.id !== id);
+    });
+  };
+
+  const clearQueue = () => {
+    queue.forEach((item) => {
+      if (item.downloadUrl) URL.revokeObjectURL(item.downloadUrl);
+    });
+    setQueue([]);
   };
 
   const loadFFmpeg = async () => {
@@ -86,7 +147,6 @@ export default function CardioDicomSaaS() {
     }
     const ffmpeg = ffmpegRef.current;
     if (!ffmpeg.loaded) {
-      setStatus('Initializing browser video encoder...');
       const { toBlobURL } = await import('@ffmpeg/util');
       const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
       await ffmpeg.load({
@@ -97,16 +157,16 @@ export default function CardioDicomSaaS() {
     return ffmpeg;
   };
 
-  const handleConvert = async () => {
-    if (!file || !selectedFormat || isProcessing) return;
+  // Convert a single queue item
+  const convertSingleItem = async (item) => {
+    const updatePatch = (patch) => {
+      setQueue((prev) => prev.map((q) => (q.id === item.id ? { ...q, ...patch } : q)));
+    };
 
-    setIsProcessing(true);
-    setDownloadUrl('');
-    setErrorMsg('');
-    setProgress(5);
+    updatePatch({ status: 'converting', statusText: 'Parsing pixels...', progress: 10, error: '' });
 
     try {
-      const arrayBuffer = await file.arrayBuffer();
+      const arrayBuffer = await item.file.arrayBuffer();
       const byteArray = new Uint8Array(arrayBuffer);
       const dataSet = dicomParser.parseDicom(byteArray);
 
@@ -122,15 +182,13 @@ export default function CardioDicomSaaS() {
 
       const pixelDataElement = dataSet.elements.x7fe00010;
       if (!pixelDataElement) {
-        throw new Error('No pixel data tag (7FE0,0010) found in this DICOM file.');
+        throw new Error('No pixel data (7FE0,0010) found.');
       }
 
       const isEncapsulated = Boolean(pixelDataElement.encapsulatedPixelData);
 
-      // Extract a single frame as a JPEG Blob (supports both Encapsulated JPEG and Raw Pixels)
       const renderFrameToBlob = (frameIndex) => {
         return new Promise((resolve, reject) => {
-          // CASE 1: Encapsulated / Compressed Echo Cine Loop (JPEG Baseline / Lossless)
           if (isEncapsulated) {
             try {
               const hasOffsetTable =
@@ -145,7 +203,6 @@ export default function CardioDicomSaaS() {
                     frameIndex
                   );
 
-              // Re-draw through canvas to guarantee clean baseline JPEG dimensions for FFmpeg
               const rawBlob = new Blob([frameBytes], { type: 'image/jpeg' });
               const imgUrl = URL.createObjectURL(rawBlob);
               const img = new Image();
@@ -160,21 +217,16 @@ export default function CardioDicomSaaS() {
               };
               img.onerror = () => {
                 URL.revokeObjectURL(imgUrl);
-                reject(
-                  new Error(
-                    'Unsupported DICOM compression codec (e.g., RLE or JPEG 2000). Export as Uncompressed or JPEG Baseline from your echo machine.'
-                  )
-                );
+                reject(new Error('Unsupported DICOM compression codec (RLE / JPEG 2000).'));
               };
               img.src = imgUrl;
               return;
             } catch (encErr) {
-              reject(new Error(`Failed to extract compressed frame ${frameIndex + 1}: ${encErr.message}`));
+              reject(new Error(`Frame ${frameIndex + 1} extraction failed: ${encErr.message}`));
               return;
             }
           }
 
-          // CASE 2: Uncompressed Raw Pixel Data (RGB, YBR_FULL_422, or Grayscale)
           const bytesPerSample = bitsAllocated / 8;
           const pixelData = new Uint8Array(
             dataSet.byteArray.buffer,
@@ -200,7 +252,6 @@ export default function CardioDicomSaaS() {
           };
 
           if (photometric === 'YBR_FULL_422') {
-            // 2 bytes per pixel: [Y0, Cb, Y1, Cr]
             const frameByteOffset = frameIndex * totalPixels * 2;
             for (let i = 0; i < totalPixels; i += 2) {
               const idx = frameByteOffset + i * 2;
@@ -248,10 +299,8 @@ export default function CardioDicomSaaS() {
               imgData.data[i * 4 + 3] = 255;
             }
           } else {
-            // Grayscale (8-bit or 16-bit with auto-range scaling)
             const frameByteOffset = frameIndex * totalPixels * bytesPerSample;
             let maxVal = 255;
-
             if (bytesPerSample === 2) {
               maxVal = 1;
               for (let i = 0; i < totalPixels; i++) {
@@ -287,89 +336,135 @@ export default function CardioDicomSaaS() {
         });
       };
 
-      // Single Image -> JPEG
-      if (!isVideo && selectedFormat === 'jpeg') {
-        setStatus('Rendering high-resolution JPEG...');
-        setProgress(60);
+      // Single-frame JPEG output
+      if (!item.isVideo || item.format === 'jpeg') {
+        updatePatch({ statusText: 'Rendering JPEG...', progress: 65 });
         const jpegBlob = await renderFrameToBlob(0);
-        setDownloadUrl(URL.createObjectURL(jpegBlob));
-        setProgress(100);
-        setStatus('JPEG image ready for download.');
-        setIsProcessing(false);
+        const url = URL.createObjectURL(jpegBlob);
+        updatePatch({
+          status: 'done',
+          statusText: 'Converted to JPEG',
+          progress: 100,
+          downloadUrl: url,
+        });
         return;
       }
 
-      // Multi-frame Cine Loop -> MP4 / AVI / MPEG
-      if (isVideo) {
-        const ffmpeg = await loadFFmpeg();
-        setProgress(20);
+      // Multi-frame Video output (MP4 / AVI / MPEG)
+      updatePatch({ statusText: 'Loading encoder...', progress: 15 });
+      const ffmpeg = await loadFFmpeg();
 
-        for (let f = 0; f < frameCount; f++) {
-          setStatus(`Extracting frame ${f + 1} of ${frameCount}...`);
-          const blob = await renderFrameToBlob(f);
-          const buf = new Uint8Array(await blob.arrayBuffer());
-          await ffmpeg.writeFile(`frame_${String(f).padStart(4, '0')}.jpg`, buf);
-          setProgress(20 + Math.round(((f + 1) / frameCount) * 50));
-        }
-
-        setStatus(`Encoding ${selectedFormat.toUpperCase()} video (${fps} FPS)...`);
-        setProgress(80);
-        const outputName = `cardio_export.${selectedFormat}`;
-
-        // Ensure even dimensions (libx264 requires width/height divisible by 2)
-        const ffmpegArgs =
-          selectedFormat === 'mp4'
-            ? [
-                '-framerate',
-                String(fps),
-                '-i',
-                'frame_%04d.jpg',
-                '-vf',
-                'scale=trunc(iw/2)*2:trunc(ih/2)*2',
-                '-c:v',
-                'libx264',
-                '-pix_fmt',
-                'yuv420p',
-                outputName,
-              ]
-            : [
-                '-framerate',
-                String(fps),
-                '-i',
-                'frame_%04d.jpg',
-                '-vf',
-                'scale=trunc(iw/2)*2:trunc(ih/2)*2',
-                outputName,
-              ];
-
-        await ffmpeg.exec(ffmpegArgs);
-
-        const data = await ffmpeg.readFile(outputName);
-        const mimeMap = { mp4: 'video/mp4', avi: 'video/x-msvideo', mpeg: 'video/mpeg' };
-        const videoBlob = new Blob([data.buffer], {
-          type: mimeMap[selectedFormat] || 'video/mp4',
+      for (let f = 0; f < item.frameCount; f++) {
+        updatePatch({
+          statusText: `Frame ${f + 1}/${item.frameCount}`,
+          progress: 20 + Math.round(((f + 1) / item.frameCount) * 55),
         });
-
-        setDownloadUrl(URL.createObjectURL(videoBlob));
-        setProgress(100);
-        setStatus(`${selectedFormat.toUpperCase()} video ready for download.`);
+        const blob = await renderFrameToBlob(f);
+        const buf = new Uint8Array(await blob.arrayBuffer());
+        await ffmpeg.writeFile(`frame_${String(f).padStart(4, '0')}.jpg`, buf);
       }
+
+      updatePatch({ statusText: `Encoding ${item.format.toUpperCase()}...`, progress: 82 });
+      const outputName = `export_${item.id.replace(/[^a-zA-Z0-9]/g, '')}.${item.format}`;
+
+      const ffmpegArgs =
+        item.format === 'mp4'
+          ? [
+              '-framerate',
+              String(fps),
+              '-i',
+              'frame_%04d.jpg',
+              '-vf',
+              'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+              '-c:v',
+              'libx264',
+              '-pix_fmt',
+              'yuv420p',
+              outputName,
+            ]
+          : [
+              '-framerate',
+              String(fps),
+              '-i',
+              'frame_%04d.jpg',
+              '-vf',
+              'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+              outputName,
+            ];
+
+      await ffmpeg.exec(ffmpegArgs);
+
+      const data = await ffmpeg.readFile(outputName);
+      const mimeMap = { mp4: 'video/mp4', avi: 'video/x-msvideo', mpeg: 'video/mpeg' };
+      const videoBlob = new Blob([data.buffer], {
+        type: mimeMap[item.format] || 'video/mp4',
+      });
+
+      // Clean up virtual FFmpeg files to save RAM during 10+ file batches
+      for (let f = 0; f < item.frameCount; f++) {
+        try {
+          await ffmpeg.deleteFile(`frame_${String(f).padStart(4, '0')}.jpg`);
+        } catch (_) {}
+      }
+      try {
+        await ffmpeg.deleteFile(outputName);
+      } catch (_) {}
+
+      const url = URL.createObjectURL(videoBlob);
+      updatePatch({
+        status: 'done',
+        statusText: `Converted to ${item.format.toUpperCase()} (${fps} FPS)`,
+        progress: 100,
+        downloadUrl: url,
+      });
     } catch (err) {
-      setErrorMsg(err.message || 'Conversion failed.');
-      setStatus('');
-    } finally {
-      setIsProcessing(false);
+      updatePatch({
+        status: 'error',
+        statusText: 'Conversion failed',
+        progress: 0,
+        error: err.message || 'Unknown error',
+      });
     }
   };
 
-  const baseFileName = file ? file.name.replace(/\.[^/.]+$/, '') : 'cardio-dicom';
+  // Sequentially convert all ready files in the batch queue
+  const handleConvertAll = async () => {
+    if (isBatchProcessing) return;
+    const pending = queue.filter((item) => item.status === 'ready');
+    if (pending.length === 0) return;
+
+    setIsBatchProcessing(true);
+    for (const item of pending) {
+      await convertSingleItem(item);
+    }
+    setIsBatchProcessing(false);
+  };
+
+  // Trigger sequential browser downloads for all completed files
+  const handleDownloadAll = () => {
+    const completed = queue.filter((item) => item.status === 'done' && item.downloadUrl);
+    completed.forEach((item, index) => {
+      setTimeout(() => {
+        const cleanBase = item.name.replace(/\.[^/.]+$/, '');
+        const a = document.createElement('a');
+        a.href = item.downloadUrl;
+        a.download = `${cleanBase}.${item.format}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }, index * 350);
+    });
+  };
+
+  const readyCount = queue.filter((i) => i.status === 'ready').length;
+  const doneCount = queue.filter((i) => i.status === 'done').length;
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#ffffff', color: '#0f172a', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
       
       {/* Top Navbar */}
-      <header style={{ position: 'sticky', top: 0, zIndex: 40, backgroundColor: 'rgba(255,255,255,0.95)', backdropFilter: 'blur(8px)', borderBottom: '1px solid #f1f5f9', padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ fontSize: '20px', fontWeight: '800', letterSpacing: '-0.02em', color: '#0f172a' }}>
+      <header style={{ position: 'sticky', top: 0, zIndex: 40, backgroundColor: 'rgba(255,255,255,0.95)', backdropFilter: 'blur(8px)', borderBottom: '1px solid #f1f5f9', padding: '14px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ fontSize: '21px', fontWeight: '800', letterSpacing: '-0.02em', color: '#0f172a' }}>
           Cardio<span style={{ color: '#0284c7' }}>DICOM</span>
         </div>
 
@@ -395,7 +490,7 @@ export default function CardioDicomSaaS() {
               </div>
 
               <nav style={{ display: 'flex', flexDirection: 'column', gap: '20px', fontSize: '16px', fontWeight: '500', color: '#475569' }}>
-                <a href="#converter" onClick={scrollToConverter} style={{ textDecoration: 'none', color: 'inherit' }}>Converter Tool</a>
+                <a href="#converter" onClick={scrollToConverter} style={{ textDecoration: 'none', color: 'inherit' }}>Batch Converter</a>
                 <a href="#how-it-works" onClick={() => setMenuOpen(false)} style={{ textDecoration: 'none', color: 'inherit' }}>How it works</a>
                 <a href="#security" onClick={() => setMenuOpen(false)} style={{ textDecoration: 'none', color: 'inherit' }}>HIPAA &amp; Privacy</a>
               </nav>
@@ -419,223 +514,376 @@ export default function CardioDicomSaaS() {
         </div>
       )}
 
-      {/* Hero Section */}
-      <section style={{ maxWidth: '720px', margin: '0 auto', padding: '44px 20px 32px 20px' }}>
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', backgroundColor: '#f0f9ff', border: '1px solid #bae6fd', color: '#0369a1', padding: '6px 14px', borderRadius: '999px', fontSize: '13px', fontWeight: '600', marginBottom: '22px' }}>
-          <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#0284c7' }} />
-          New · Echo Cine Loop &amp; Still Export
+      {/* 2-Column Hero Section with Right-Side Cardio Visual Banners */}
+      <section style={{ maxWidth: '1120px', margin: '0 auto', padding: '44px 24px 36px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '36px', alignItems: 'center' }}>
+        
+        {/* Left Column: Headline & CTA */}
+        <div>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', backgroundColor: '#f0f9ff', border: '1px solid #bae6fd', color: '#0369a1', padding: '6px 14px', borderRadius: '999px', fontSize: '13px', fontWeight: '600', marginBottom: '22px' }}>
+            <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#0284c7' }} />
+            New · Batch Echo Cine Loop &amp; Still Export
+          </div>
+
+          <h1 style={{ fontSize: '42px', lineHeight: '1.13', fontWeight: '800', letterSpacing: '-0.03em', color: '#0f172a', margin: '0 0 18px 0' }}>
+            Convert cardiac DICOM files in <span style={{ color: '#0284c7' }}>one place</span>
+          </h1>
+
+          <p style={{ fontSize: '17px', lineHeight: '1.6', color: '#475569', margin: '0 0 28px 0' }}>
+            Upload single or multiple echocardiography cine loops and still scans at once. CardioDICOM converts videos into MP4, AVI, or MPEG and images into high-resolution JPEG — 100% locally in your browser.
+          </p>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxWidth: '340px' }}>
+            <button
+              onClick={scrollToConverter}
+              style={{ width: '100%', padding: '14px 20px', borderRadius: '10px', border: 'none', backgroundColor: '#0284c7', color: '#ffffff', fontWeight: '700', fontSize: '16px', cursor: 'pointer', boxShadow: '0 4px 14px rgba(2, 132, 199, 0.25)' }}
+            >
+              Start converting free →
+            </button>
+            <button
+              onClick={() => { setAuthNotice(''); setAuthModal('signin'); }}
+              style={{ width: '100%', padding: '13px 20px', borderRadius: '10px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', color: '#0f172a', fontWeight: '600', fontSize: '15px', cursor: 'pointer' }}
+            >
+              Sign in to workspace
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', marginTop: '22px', fontSize: '13px', color: '#64748b', fontWeight: '500' }}>
+            <span><strong style={{ color: '#10b981' }}>✓</strong> Batch multi-file upload</span>
+            <span><strong style={{ color: '#10b981' }}>✓</strong> 100% browser-based</span>
+            <span><strong style={{ color: '#10b981' }}>✓</strong> Zero server uploads</span>
+          </div>
         </div>
 
-        <h1 style={{ fontSize: '38px', lineHeight: '1.15', fontWeight: '800', letterSpacing: '-0.03em', color: '#0f172a', margin: '0 0 18px 0' }}>
-          Convert cardiac DICOM files in <span style={{ color: '#0284c7' }}>one place</span>
-        </h1>
+        {/* Right Column: Cardio Echo & Visual Engine Banners */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          
+          {/* Card 1: Echo Scan Preview */}
+          <div style={{ background: 'linear-gradient(135deg, #0b162c 0%, #13294b 100%)', borderRadius: '16px', padding: '18px 20px', color: '#ffffff', boxShadow: '0 14px 30px -8px rgba(15, 23, 42, 0.25)', border: '1px solid #1e3a5f' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <span style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '0.08em', color: '#7dd3fc' }}>ECHO SCAN PREVIEW</span>
+              <span style={{ fontSize: '11px', backgroundColor: 'rgba(14, 165, 233, 0.2)', color: '#38bdf8', padding: '2px 8px', borderRadius: '999px', fontWeight: '600' }}>4-CHAMBER CINE</span>
+            </div>
+            <svg viewBox="0 0 360 120" style={{ width: '100%', height: 'auto', display: 'block', borderRadius: '10px', backgroundColor: '#060d1a' }}>
+              {/* Ultrasound Sector Cone */}
+              <path d="M180 12 L75 104 A145 145 0 0 0 285 104 Z" fill="url(#sectorGrad)" stroke="#1e3a5f" strokeWidth="1" />
+              <defs>
+                <radialGradient id="sectorGrad" cx="50%" cy="10%" r="85%">
+                  <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.45" />
+                  <stop offset="65%" stopColor="#0284c7" stopOpacity="0.18" />
+                  <stop offset="100%" stopColor="#060d1a" stopOpacity="0.9" />
+                </radialGradient>
+              </defs>
+              {/* Stylized Cardiac Chambers */}
+              <ellipse cx="165" cy="64" rx="22" ry="30" transform="rotate(-14 165 64)" fill="none" stroke="#7dd3fc" strokeWidth="2.5" opacity="0.85" />
+              <ellipse cx="202" cy="66" rx="17" ry="26" transform="rotate(14 202 66)" fill="none" stroke="#38bdf8" strokeWidth="2" opacity="0.7" />
+              {/* Live ECG Rhythm Strip at bottom */}
+              <polyline
+                fill="none"
+                stroke="#10b981"
+                strokeWidth="2"
+                points="16,108 65,108 74,102 82,108 90,108 95,84 101,115 107,96 115,108 165,108 174,102 182,108 190,108 195,84 201,115 207,96 215,108 265,108 274,102 282,108 290,108 295,84 301,115 307,96 315,108 345,108"
+              />
+            </svg>
+          </div>
 
-        <p style={{ fontSize: '17px', lineHeight: '1.6', color: '#475569', margin: '0 0 28px 0' }}>
-          CardioDICOM transforms echocardiography cine loops into MP4, AVI, or MPEG videos and exports still DICOM frames as high-resolution JPEG images — right inside your browser.
-        </p>
+          {/* Card 2: Cardiovisual Engine */}
+          <div style={{ background: 'linear-gradient(135deg, #090d16 0%, #172033 100%)', borderRadius: '16px', padding: '18px 20px', color: '#ffffff', boxShadow: '0 14px 30px -8px rgba(15, 23, 42, 0.25)', border: '1px solid #1e293b', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px' }}>
+            <div>
+              <div style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '0.08em', color: '#38bdf8', marginBottom: '6px' }}>
+                CARDIOVISUAL ENGINE
+              </div>
+              <div style={{ fontSize: '15px', fontWeight: '700', color: '#f8fafc', marginBottom: '4px' }}>
+                Multi-File DICOM Batch Queue
+              </div>
+              <div style={{ fontSize: '12px', color: '#94a3b8', lineHeight: '1.5' }}>
+                Auto-detects cine frames vs. still scans and exports each file in its native format.
+              </div>
+            </div>
+            <div style={{ width: '56px', height: '56px', borderRadius: '14px', background: 'linear-gradient(135deg, rgba(14,165,233,0.2), rgba(244,63,94,0.2))', border: '1px solid rgba(56,189,248,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '28px', flexShrink: 0 }}>
+              🫀
+            </div>
+          </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxWidth: '340px' }}>
-          <button
-            onClick={scrollToConverter}
-            style={{ width: '100%', padding: '14px 20px', borderRadius: '10px', border: 'none', backgroundColor: '#0284c7', color: '#ffffff', fontWeight: '700', fontSize: '16px', cursor: 'pointer', boxShadow: '0 4px 14px rgba(2, 132, 199, 0.25)' }}
-          >
-            Start converting free →
-          </button>
-          <button
-            onClick={() => { setAuthNotice(''); setAuthModal('signin'); }}
-            style={{ width: '100%', padding: '13px 20px', borderRadius: '10px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', color: '#0f172a', fontWeight: '600', fontSize: '15px', cursor: 'pointer' }}
-          >
-            Sign in to workspace
-          </button>
-        </div>
-
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', marginTop: '22px', fontSize: '13px', color: '#64748b', fontWeight: '500' }}>
-          <span><strong style={{ color: '#10b981' }}>✓</strong> No sign-up required</span>
-          <span><strong style={{ color: '#10b981' }}>✓</strong> 100% browser-based</span>
-          <span><strong style={{ color: '#10b981' }}>✓</strong> Zero server uploads</span>
         </div>
       </section>
 
-      {/* Interactive Converter Tool Section */}
-      <section ref={converterSectionRef} id="converter" style={{ maxWidth: '540px', margin: '0 auto', padding: '16px 20px 56px 20px' }}>
+      {/* Interactive Batch Converter Section */}
+      <section ref={converterSectionRef} id="converter" style={{ maxWidth: '760px', margin: '0 auto', padding: '12px 20px 64px 20px' }}>
         <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '18px', padding: '24px', boxShadow: '0 10px 25px -5px rgba(15, 23, 42, 0.06)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <h2 style={{ fontSize: '18px', fontWeight: '700', margin: 0, color: '#0f172a' }}>
-              Cardio DICOM Converter
-            </h2>
+          
+          <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+            <div>
+              <h2 style={{ fontSize: '19px', fontWeight: '800', margin: 0, color: '#0f172a' }}>
+                Cardio DICOM Batch Converter
+              </h2>
+              <p style={{ fontSize: '12px', color: '#64748b', margin: '2px 0 0 0' }}>
+                Select 1 or multiple DICOM files — each converts to its own format
+              </p>
+            </div>
             <span style={{ fontSize: '11px', fontWeight: '700', backgroundColor: '#e0f2fe', color: '#0369a1', padding: '4px 10px', borderRadius: '999px' }}>
-              LOCAL ENGINE
+              LOCAL BATCH ENGINE
             </span>
           </div>
 
-          {/* Upload Zone */}
+          {/* Multi-File Upload Zone */}
           <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', border: '2px dashed #94a3b8', borderRadius: '14px', padding: '28px 16px', backgroundColor: '#ffffff', cursor: 'pointer', textAlign: 'center' }}>
-            <span style={{ fontSize: '30px', marginBottom: '8px' }}>🫀</span>
-            <span style={{ fontSize: '15px', fontWeight: '600', color: '#0f172a' }}>
-              {file ? file.name : 'Tap to Upload DICOM Video or Image (.dcm)'}
+            <span style={{ fontSize: '30px', marginBottom: '8px' }}>📂</span>
+            <span style={{ fontSize: '15px', fontWeight: '700', color: '#0f172a' }}>
+              {queue.length > 0 ? 'Tap to Add More DICOM Files' : 'Tap to Upload Single or Multiple DICOM Files'}
             </span>
             <span style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>
-              {file ? `${(file.size / (1024 * 1024)).toFixed(2)} MB • ${dimensions} • ${encodingInfo}` : 'Videos → MP4, AVI, MPEG  |  Images → JPEG'}
+              Hold Ctrl / Cmd or drag-select multiple files • Videos → MP4, AVI, MPEG | Images → JPEG
             </span>
             <input
               type="file"
-              onChange={handleFileUpload}
+              multiple
+              onChange={handleFilesUpload}
               style={{ display: 'none' }}
             />
           </label>
 
-          {/* Detected Media Info */}
-          {file && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', padding: '10px 14px', borderRadius: '10px', marginTop: '14px', fontSize: '13px' }}>
-              <span style={{ color: '#64748b' }}>Detected DICOM Type:</span>
-              <span style={{ fontWeight: '700', color: isVideo ? '#0284c7' : '#059669' }}>
-                {isVideo ? `Cine Video (${frameCount} frames)` : 'Single Image (1 frame)'}
-              </span>
-            </div>
-          )}
+          {/* Batch Controls Bar (Visible when files are queued) */}
+          {queue.length > 0 && (
+            <div style={{ marginTop: '18px', padding: '12px 14px', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+              <div style={{ fontSize: '13px', fontWeight: '700', color: '#0f172a' }}>
+                {queue.length} {queue.length === 1 ? 'File' : 'Files'} Queued ({doneCount} converted)
+              </div>
 
-          {/* Format Selector */}
-          {file && (
-            <div style={{ marginTop: '16px' }}>
-              <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#334155', marginBottom: '8px' }}>
-                Which format do you want to download?
-              </label>
-              <div style={{ display: 'grid', gridTemplateColumns: isVideo ? 'repeat(3, 1fr)' : '1fr', gap: '8px' }}>
-                {(isVideo ? ['mp4', 'avi', 'mpeg'] : ['jpeg']).map((fmt) => {
-                  const active = selectedFormat === fmt;
-                  return (
+              {/* Global Video Format Switcher if any videos exist */}
+              {queue.some((i) => i.isVideo) && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
+                  <span style={{ color: '#64748b', fontWeight: '600' }}>All Videos:</span>
+                  {['mp4', 'avi', 'mpeg'].map((fmt) => (
                     <button
                       key={fmt}
                       type="button"
-                      onClick={() => {
-                        setSelectedFormat(fmt);
-                        setDownloadUrl('');
-                      }}
+                      onClick={() => applyFormatToAllVideos(fmt)}
                       style={{
-                        padding: '11px',
-                        borderRadius: '10px',
-                        border: active ? '2px solid #0284c7' : '1px solid #cbd5e1',
-                        backgroundColor: active ? '#e0f2fe' : '#ffffff',
-                        color: active ? '#0369a1' : '#475569',
+                        padding: '4px 9px',
+                        borderRadius: '6px',
+                        border: defaultVideoFormat === fmt ? '1.5px solid #0284c7' : '1px solid #cbd5e1',
+                        backgroundColor: defaultVideoFormat === fmt ? '#e0f2fe' : '#f8fafc',
+                        color: defaultVideoFormat === fmt ? '#0369a1' : '#475569',
                         fontWeight: '700',
-                        fontSize: '13px',
+                        fontSize: '11px',
                         cursor: 'pointer',
                         textTransform: 'uppercase',
                       }}
                     >
-                      .{fmt}
+                      {fmt}
                     </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Convert Button */}
-          {file && (
-            <button
-              type="button"
-              onClick={handleConvert}
-              disabled={isProcessing}
-              style={{
-                width: '100%',
-                marginTop: '18px',
-                padding: '14px',
-                borderRadius: '10px',
-                border: 'none',
-                backgroundColor: isProcessing ? '#94a3b8' : '#0284c7',
-                color: '#ffffff',
-                fontWeight: '700',
-                fontSize: '15px',
-                cursor: isProcessing ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {isProcessing ? 'Converting...' : `Convert to ${selectedFormat.toUpperCase()}`}
-            </button>
-          )}
-
-          {/* Progress & Status */}
-          {(isProcessing || status) && (
-            <div style={{ marginTop: '14px' }}>
-              {isProcessing && (
-                <div style={{ width: '100%', height: '6px', backgroundColor: '#e2e8f0', borderRadius: '999px', overflow: 'hidden', marginBottom: '8px' }}>
-                  <div style={{ width: `${progress}%`, height: '100%', backgroundColor: '#0284c7', transition: 'width 0.3s ease' }} />
+                  ))}
                 </div>
               )}
-              <p style={{ fontSize: '13px', textAlign: 'center', color: '#475569', margin: 0 }}>
-                {status}
-              </p>
-            </div>
-          )}
 
-          {/* Error Box */}
-          {errorMsg && (
-            <div style={{ marginTop: '14px', padding: '12px', borderRadius: '10px', backgroundColor: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', fontSize: '13px', textAlign: 'center' }}>
-              {errorMsg}
-            </div>
-          )}
-
-          {/* Live Video / Image Preview & Download Button */}
-          {downloadUrl && (
-            <div style={{ marginTop: '18px', paddingTop: '16px', borderTop: '1px solid #e2e8f0' }}>
-              {isVideo && selectedFormat === 'mp4' ? (
-                <video
-                  src={downloadUrl}
-                  controls
-                  autoPlay
-                  loop
-                  muted
-                  playsInline
-                  style={{ width: '100%', borderRadius: '10px', marginBottom: '12px', border: '1px solid #cbd5e1', backgroundColor: '#000000' }}
-                />
-              ) : !isVideo ? (
-                <img
-                  src={downloadUrl}
-                  alt="Converted DICOM preview"
-                  style={{ width: '100%', borderRadius: '10px', marginBottom: '12px', border: '1px solid #cbd5e1' }}
-                />
-              ) : null}
-
-              <a
-                href={downloadUrl}
-                download={`${baseFileName}.${selectedFormat}`}
-                style={{
-                  display: 'block',
-                  width: '100%',
-                  textAlign: 'center',
-                  padding: '14px',
-                  borderRadius: '10px',
-                  backgroundColor: '#059669',
-                  color: '#ffffff',
-                  fontWeight: '700',
-                  fontSize: '15px',
-                  textDecoration: 'none',
-                  boxSizing: 'border-box',
-                }}
+              <button
+                type="button"
+                onClick={clearQueue}
+                disabled={isBatchProcessing}
+                style={{ background: 'none', border: 'none', color: '#dc2626', fontSize: '12px', fontWeight: '600', cursor: isBatchProcessing ? 'not-allowed' : 'pointer' }}
               >
-                Download {selectedFormat.toUpperCase()} File
-              </a>
+                Clear all
+              </button>
             </div>
           )}
+
+          {/* Individual File Cards List */}
+          {queue.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '14px' }}>
+              {queue.map((item) => {
+                const cleanBase = item.name.replace(/\.[^/.]+$/, '');
+                return (
+                  <div
+                    key={item.id}
+                    style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '14px 16px' }}
+                  >
+                    {/* Top Row: Filename, Metadata & Individual Format Selector */}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+                      <div style={{ minWidth: '180px', flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontSize: '16px' }}>{item.isVideo ? '🎬' : '🖼️'}</span>
+                          <span style={{ fontSize: '14px', fontWeight: '700', color: '#0f172a', wordBreak: 'break-all' }}>
+                            {item.name}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#64748b', marginTop: '3px' }}>
+                          {item.sizeMB} MB • {item.dimensions} •{' '}
+                          <strong style={{ color: item.isVideo ? '#0284c7' : '#059669' }}>
+                            {item.isVideo ? `Video (${item.frameCount} frames)` : 'Still Image (1 frame)'}
+                          </strong>
+                        </div>
+                      </div>
+
+                      {/* Per-file Output Format Selector & Remove Button */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        {item.status !== 'error' && (
+                          <select
+                            value={item.format}
+                            disabled={isBatchProcessing}
+                            onChange={(e) => updateItemFormat(item.id, e.target.value)}
+                            style={{
+                              padding: '6px 10px',
+                              borderRadius: '8px',
+                              border: '1px solid #cbd5e1',
+                              backgroundColor: '#f8fafc',
+                              color: '#0f172a',
+                              fontWeight: '700',
+                              fontSize: '12px',
+                              textTransform: 'uppercase',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {item.isVideo ? (
+                              <>
+                                <option value="mp4">MP4</option>
+                                <option value="avi">AVI</option>
+                                <option value="mpeg">MPEG</option>
+                              </>
+                            ) : (
+                              <option value="jpeg">JPEG</option>
+                            )}
+                          </select>
+                        )}
+
+                        {item.status === 'done' && item.downloadUrl && (
+                          <a
+                            href={item.downloadUrl}
+                            download={`${cleanBase}.${item.format}`}
+                            style={{
+                              padding: '7px 14px',
+                              borderRadius: '8px',
+                              backgroundColor: '#059669',
+                              color: '#ffffff',
+                              fontWeight: '700',
+                              fontSize: '12px',
+                              textDecoration: 'none',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            Download .{item.format.toUpperCase()}
+                          </a>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => removeQueueItem(item.id)}
+                          disabled={isBatchProcessing && item.status === 'converting'}
+                          title="Remove file"
+                          style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '16px', cursor: 'pointer', padding: '4px' }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Progress Bar & Status Line */}
+                    <div style={{ marginTop: '10px' }}>
+                      {item.status === 'converting' && (
+                        <div style={{ width: '100%', height: '5px', backgroundColor: '#e2e8f0', borderRadius: '999px', overflow: 'hidden', marginBottom: '6px' }}>
+                          <div style={{ width: `${item.progress}%`, height: '100%', backgroundColor: '#0284c7', transition: 'width 0.25s ease' }} />
+                        </div>
+                      )}
+                      <div style={{ fontSize: '12px', color: item.status === 'error' ? '#dc2626' : item.status === 'done' ? '#059669' : '#64748b', fontWeight: '500' }}>
+                        {item.error ? `Error: ${item.error}` : item.statusText}
+                      </div>
+                    </div>
+
+                    {/* Inline Media Preview after Conversion */}
+                    {item.status === 'done' && item.downloadUrl && (
+                      <div style={{ marginTop: '10px' }}>
+                        {item.isVideo && item.format === 'mp4' ? (
+                          <video
+                            src={item.downloadUrl}
+                            controls
+                            loop
+                            muted
+                            playsInline
+                            style={{ width: '100%', maxHeight: '240px', borderRadius: '8px', backgroundColor: '#000000' }}
+                          />
+                        ) : !item.isVideo ? (
+                          <img
+                            src={item.downloadUrl}
+                            alt={item.name}
+                            style={{ maxWidth: '100%', maxHeight: '220px', borderRadius: '8px', border: '1px solid #e2e8f0' }}
+                          />
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Bottom Batch Action Buttons */}
+          {queue.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '18px' }}>
+              {readyCount > 0 && (
+                <button
+                  type="button"
+                  onClick={handleConvertAll}
+                  disabled={isBatchProcessing}
+                  style={{
+                    flex: 1,
+                    minWidth: '200px',
+                    padding: '14px',
+                    borderRadius: '10px',
+                    border: 'none',
+                    backgroundColor: isBatchProcessing ? '#94a3b8' : '#0284c7',
+                    color: '#ffffff',
+                    fontWeight: '700',
+                    fontSize: '15px',
+                    cursor: isBatchProcessing ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {isBatchProcessing
+                    ? 'Converting Batch...'
+                    : `Convert ${readyCount} ${readyCount === 1 ? 'File' : 'Files'}`}
+                </button>
+              )}
+
+              {doneCount > 1 && (
+                <button
+                  type="button"
+                  onClick={handleDownloadAll}
+                  style={{
+                    flex: 1,
+                    minWidth: '200px',
+                    padding: '14px',
+                    borderRadius: '10px',
+                    border: 'none',
+                    backgroundColor: '#059669',
+                    color: '#ffffff',
+                    fontWeight: '700',
+                    fontSize: '15px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Download All ({doneCount} Files)
+                </button>
+              )}
+            </div>
+          )}
+
         </div>
       </section>
 
       {/* How It Works Section */}
       <section id="how-it-works" style={{ backgroundColor: '#f8fafc', borderTop: '1px solid #f1f5f9', padding: '48px 20px' }}>
-        <div style={{ maxWidth: '720px', margin: '0 auto' }}>
+        <div style={{ maxWidth: '760px', margin: '0 auto' }}>
           <h2 style={{ fontSize: '24px', fontWeight: '800', margin: '0 0 24px 0', color: '#0f172a' }}>How it works</h2>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
             <div style={{ backgroundColor: '#ffffff', padding: '20px', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-              <div style={{ fontWeight: '800', color: '#0284c7', marginBottom: '6px' }}>1. Upload DICOM</div>
-              <p style={{ fontSize: '14px', color: '#475569', margin: 0 }}>Select any single-frame DICOM scan or multi-frame echocardiogram loop.</p>
+              <div style={{ fontWeight: '800', color: '#0284c7', marginBottom: '6px' }}>1. Batch Upload</div>
+              <p style={{ fontSize: '14px', color: '#475569', margin: 0 }}>Select 1 or 10+ DICOM videos and still images together in one step.</p>
             </div>
             <div style={{ backgroundColor: '#ffffff', padding: '20px', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-              <div style={{ fontWeight: '800', color: '#0284c7', marginBottom: '6px' }}>2. Pick Format</div>
-              <p style={{ fontSize: '14px', color: '#475569', margin: 0 }}>Choose MP4, AVI, or MPEG for cine loops, or JPEG for still images.</p>
+              <div style={{ fontWeight: '800', color: '#0284c7', marginBottom: '6px' }}>2. Auto Format Mapping</div>
+              <p style={{ fontSize: '14px', color: '#475569', margin: 0 }}>Cine loops map to MP4/AVI/MPEG and still frames map to JPEG automatically.</p>
             </div>
             <div style={{ backgroundColor: '#ffffff', padding: '20px', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-              <div style={{ fontWeight: '800', color: '#0284c7', marginBottom: '6px' }}>3. Instant Download</div>
-              <p style={{ fontSize: '14px', color: '#475569', margin: 0 }}>Files process locally on your device and download immediately.</p>
+              <div style={{ fontWeight: '800', color: '#0284c7', marginBottom: '6px' }}>3. Individual or All Export</div>
+              <p style={{ fontSize: '14px', color: '#475569', margin: 0 }}>Preview each file inline and download individually or all at once.</p>
             </div>
           </div>
         </div>
@@ -643,14 +891,13 @@ export default function CardioDicomSaaS() {
 
       {/* Dark SaaS Footer */}
       <footer id="security" style={{ backgroundColor: '#090d16', color: '#94a3b8', padding: '48px 24px 36px 24px' }}>
-        <div style={{ maxWidth: '720px', margin: '0 auto' }}>
+        <div style={{ maxWidth: '760px', margin: '0 auto' }}>
           <div style={{ fontSize: '22px', fontWeight: '800', color: '#38bdf8', marginBottom: '12px' }}>
             Cardio<span style={{ color: '#ffffff' }}>DICOM</span>
           </div>
           <p style={{ fontSize: '14px', lineHeight: '1.6', maxWidth: '460px', margin: '0 0 32px 0' }}>
             The browser-native platform that helps clinicians, researchers, and imaging labs convert cardiac DICOM files safely — all in one place.
           </p>
-
           <div style={{ borderTop: '1px solid #1e293b', paddingTop: '24px', textAlign: 'center', fontSize: '13px', color: '#64748b' }}>
             © 2026 CardioDICOM. All rights reserved.
           </div>
