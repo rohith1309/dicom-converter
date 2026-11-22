@@ -6,7 +6,7 @@ import dicomParser from 'dicom-parser';
 export default function CardioDicomSaaS() {
   // Navigation & Auth Modal State
   const [menuOpen, setMenuOpen] = useState(false);
-  const [authModal, setAuthModal] = useState(null); // 'signin' | 'signup' | null
+  const [authModal, setAuthModal] = useState(null);
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authNotice, setAuthNotice] = useState('');
@@ -16,6 +16,7 @@ export default function CardioDicomSaaS() {
   const [isVideo, setIsVideo] = useState(false);
   const [frameCount, setFrameCount] = useState(1);
   const [dimensions, setDimensions] = useState('');
+  const [encodingInfo, setEncodingInfo] = useState('');
   const [selectedFormat, setSelectedFormat] = useState('');
   const [status, setStatus] = useState('');
   const [progress, setProgress] = useState(0);
@@ -54,9 +55,13 @@ export default function CardioDicomSaaS() {
       const frames = dataSet.intString('x00280008') || 1;
       const rows = dataSet.uint16('x00280010') || 0;
       const cols = dataSet.uint16('x00280011') || 0;
+      const photometric = (dataSet.string('x00280004') || 'MONOCHROME2').trim();
+      const pixelDataElement = dataSet.elements.x7fe00010;
+      const isEncapsulated = Boolean(pixelDataElement?.encapsulatedPixelData);
 
       setFrameCount(frames);
       setDimensions(`${cols} × ${rows} px`);
+      setEncodingInfo(`${isEncapsulated ? 'Compressed JPEG' : 'Raw'} • ${photometric}`);
 
       if (frames > 1) {
         setIsVideo(true);
@@ -70,7 +75,7 @@ export default function CardioDicomSaaS() {
     } catch (err) {
       setFile(null);
       setStatus('');
-      setErrorMsg('Invalid DICOM file. Please upload a valid uncompressed .dcm file.');
+      setErrorMsg('Invalid DICOM file. Please upload a valid .dcm file.');
     }
   };
 
@@ -108,6 +113,7 @@ export default function CardioDicomSaaS() {
       const rows = dataSet.uint16('x00280010');
       const cols = dataSet.uint16('x00280011');
       const samplesPerPixel = dataSet.uint16('x00280002') || 1;
+      const photometric = (dataSet.string('x00280004') || 'MONOCHROME2').trim();
       const planarConfig = dataSet.uint16('x00280006') || 0;
       const bitsAllocated = dataSet.uint16('x00280100') || 8;
       const frameTime = dataSet.floatString('x00181063');
@@ -116,54 +122,159 @@ export default function CardioDicomSaaS() {
 
       const pixelDataElement = dataSet.elements.x7fe00010;
       if (!pixelDataElement) {
-        throw new Error('No raw pixel data found (file may use compressed transfer syntax).');
+        throw new Error('No pixel data tag (7FE0,0010) found in this DICOM file.');
       }
 
-      const bytesPerSample = bitsAllocated / 8;
-      const pixelData = new Uint8Array(
-        dataSet.byteArray.buffer,
-        pixelDataElement.dataOffset,
-        pixelDataElement.length
-      );
+      const isEncapsulated = Boolean(pixelDataElement.encapsulatedPixelData);
 
+      // Extract a single frame as a JPEG Blob (supports both Encapsulated JPEG and Raw Pixels)
       const renderFrameToBlob = (frameIndex) => {
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
+          // CASE 1: Encapsulated / Compressed Echo Cine Loop (JPEG Baseline / Lossless)
+          if (isEncapsulated) {
+            try {
+              const hasOffsetTable =
+                pixelDataElement.basicOffsetTable &&
+                pixelDataElement.basicOffsetTable.length > 0;
+
+              const frameBytes = hasOffsetTable
+                ? dicomParser.readEncapsulatedImageFrame(dataSet, pixelDataElement, frameIndex)
+                : dicomParser.readEncapsulatedPixelDataFromFragments(
+                    dataSet,
+                    pixelDataElement,
+                    frameIndex
+                  );
+
+              // Re-draw through canvas to guarantee clean baseline JPEG dimensions for FFmpeg
+              const rawBlob = new Blob([frameBytes], { type: 'image/jpeg' });
+              const imgUrl = URL.createObjectURL(rawBlob);
+              const img = new Image();
+              img.onload = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width || cols;
+                canvas.height = img.height || rows;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                URL.revokeObjectURL(imgUrl);
+                canvas.toBlob((cleanBlob) => resolve(cleanBlob), 'image/jpeg', 0.95);
+              };
+              img.onerror = () => {
+                URL.revokeObjectURL(imgUrl);
+                reject(
+                  new Error(
+                    'Unsupported DICOM compression codec (e.g., RLE or JPEG 2000). Export as Uncompressed or JPEG Baseline from your echo machine.'
+                  )
+                );
+              };
+              img.src = imgUrl;
+              return;
+            } catch (encErr) {
+              reject(new Error(`Failed to extract compressed frame ${frameIndex + 1}: ${encErr.message}`));
+              return;
+            }
+          }
+
+          // CASE 2: Uncompressed Raw Pixel Data (RGB, YBR_FULL_422, or Grayscale)
+          const bytesPerSample = bitsAllocated / 8;
+          const pixelData = new Uint8Array(
+            dataSet.byteArray.buffer,
+            pixelDataElement.dataOffset,
+            pixelDataElement.length
+          );
+
           const canvas = document.createElement('canvas');
           canvas.width = cols;
           canvas.height = rows;
           const ctx = canvas.getContext('2d');
           const imgData = ctx.createImageData(cols, rows);
           const totalPixels = cols * rows;
-          const frameByteOffset = frameIndex * totalPixels * samplesPerPixel * bytesPerSample;
 
-          if (samplesPerPixel === 3) {
-            if (planarConfig === 0) {
-              for (let i = 0; i < totalPixels; i++) {
-                const idx = frameByteOffset + i * 3;
-                imgData.data[i * 4] = pixelData[idx] || 0;
-                imgData.data[i * 4 + 1] = pixelData[idx + 1] || 0;
-                imgData.data[i * 4 + 2] = pixelData[idx + 2] || 0;
-                imgData.data[i * 4 + 3] = 255;
-              }
-            } else {
-              for (let i = 0; i < totalPixels; i++) {
-                imgData.data[i * 4] = pixelData[frameByteOffset + i] || 0;
-                imgData.data[i * 4 + 1] = pixelData[frameByteOffset + totalPixels + i] || 0;
-                imgData.data[i * 4 + 2] = pixelData[frameByteOffset + totalPixels * 2 + i] || 0;
-                imgData.data[i * 4 + 3] = 255;
+          const ybrToRgb = (y, cb, cr) => {
+            const r = Math.min(255, Math.max(0, Math.round(y + 1.402 * (cr - 128))));
+            const g = Math.min(
+              255,
+              Math.max(0, Math.round(y - 0.344136 * (cb - 128) - 0.714136 * (cr - 128)))
+            );
+            const b = Math.min(255, Math.max(0, Math.round(y + 1.772 * (cb - 128))));
+            return [r, g, b];
+          };
+
+          if (photometric === 'YBR_FULL_422') {
+            // 2 bytes per pixel: [Y0, Cb, Y1, Cr]
+            const frameByteOffset = frameIndex * totalPixels * 2;
+            for (let i = 0; i < totalPixels; i += 2) {
+              const idx = frameByteOffset + i * 2;
+              const y0 = pixelData[idx] || 0;
+              const cb = pixelData[idx + 1] || 128;
+              const y1 = pixelData[idx + 2] || 0;
+              const cr = pixelData[idx + 3] || 128;
+
+              const [r0, g0, b0] = ybrToRgb(y0, cb, cr);
+              const [r1, g1, b1] = ybrToRgb(y1, cb, cr);
+
+              imgData.data[i * 4] = r0;
+              imgData.data[i * 4 + 1] = g0;
+              imgData.data[i * 4 + 2] = b0;
+              imgData.data[i * 4 + 3] = 255;
+
+              if (i + 1 < totalPixels) {
+                imgData.data[(i + 1) * 4] = r1;
+                imgData.data[(i + 1) * 4 + 1] = g1;
+                imgData.data[(i + 1) * 4 + 2] = b1;
+                imgData.data[(i + 1) * 4 + 3] = 255;
               }
             }
+          } else if (samplesPerPixel === 3) {
+            const frameByteOffset = frameIndex * totalPixels * 3 * bytesPerSample;
+            const isYbr = photometric.startsWith('YBR');
+
+            for (let i = 0; i < totalPixels; i++) {
+              let c0, c1, c2;
+              if (planarConfig === 0) {
+                const idx = frameByteOffset + i * 3;
+                c0 = pixelData[idx] || 0;
+                c1 = pixelData[idx + 1] || 0;
+                c2 = pixelData[idx + 2] || 0;
+              } else {
+                c0 = pixelData[frameByteOffset + i] || 0;
+                c1 = pixelData[frameByteOffset + totalPixels + i] || 0;
+                c2 = pixelData[frameByteOffset + totalPixels * 2 + i] || 0;
+              }
+
+              const [r, g, b] = isYbr ? ybrToRgb(c0, c1, c2) : [c0, c1, c2];
+              imgData.data[i * 4] = r;
+              imgData.data[i * 4 + 1] = g;
+              imgData.data[i * 4 + 2] = b;
+              imgData.data[i * 4 + 3] = 255;
+            }
           } else {
+            // Grayscale (8-bit or 16-bit with auto-range scaling)
+            const frameByteOffset = frameIndex * totalPixels * bytesPerSample;
+            let maxVal = 255;
+
+            if (bytesPerSample === 2) {
+              maxVal = 1;
+              for (let i = 0; i < totalPixels; i++) {
+                const low = pixelData[frameByteOffset + i * 2] || 0;
+                const high = pixelData[frameByteOffset + i * 2 + 1] || 0;
+                const v = (high << 8) | low;
+                if (v > maxVal) maxVal = v;
+              }
+            }
+
+            const invert = photometric === 'MONOCHROME1';
             for (let i = 0; i < totalPixels; i++) {
               let val = 0;
               if (bytesPerSample === 2) {
                 const low = pixelData[frameByteOffset + i * 2] || 0;
                 const high = pixelData[frameByteOffset + i * 2 + 1] || 0;
-                val = ((high << 8) | low) >> 4;
-                if (val > 255) val = 255;
+                const raw16 = (high << 8) | low;
+                val = Math.round((raw16 / maxVal) * 255);
               } else {
                 val = pixelData[frameByteOffset + i] || 0;
               }
+              if (invert) val = 255 - val;
+
               imgData.data[i * 4] = val;
               imgData.data[i * 4 + 1] = val;
               imgData.data[i * 4 + 2] = val;
@@ -176,6 +287,7 @@ export default function CardioDicomSaaS() {
         });
       };
 
+      // Single Image -> JPEG
       if (!isVideo && selectedFormat === 'jpeg') {
         setStatus('Rendering high-resolution JPEG...');
         setProgress(60);
@@ -187,6 +299,7 @@ export default function CardioDicomSaaS() {
         return;
       }
 
+      // Multi-frame Cine Loop -> MP4 / AVI / MPEG
       if (isVideo) {
         const ffmpeg = await loadFFmpeg();
         setProgress(20);
@@ -203,23 +316,46 @@ export default function CardioDicomSaaS() {
         setProgress(80);
         const outputName = `cardio_export.${selectedFormat}`;
 
+        // Ensure even dimensions (libx264 requires width/height divisible by 2)
         const ffmpegArgs =
           selectedFormat === 'mp4'
-            ? ['-framerate', String(fps), '-i', 'frame_%04d.jpg', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', outputName]
-            : ['-framerate', String(fps), '-i', 'frame_%04d.jpg', outputName];
+            ? [
+                '-framerate',
+                String(fps),
+                '-i',
+                'frame_%04d.jpg',
+                '-vf',
+                'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+                '-c:v',
+                'libx264',
+                '-pix_fmt',
+                'yuv420p',
+                outputName,
+              ]
+            : [
+                '-framerate',
+                String(fps),
+                '-i',
+                'frame_%04d.jpg',
+                '-vf',
+                'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+                outputName,
+              ];
 
         await ffmpeg.exec(ffmpegArgs);
 
         const data = await ffmpeg.readFile(outputName);
         const mimeMap = { mp4: 'video/mp4', avi: 'video/x-msvideo', mpeg: 'video/mpeg' };
-        const videoBlob = new Blob([data.buffer], { type: mimeMap[selectedFormat] || 'video/mp4' });
+        const videoBlob = new Blob([data.buffer], {
+          type: mimeMap[selectedFormat] || 'video/mp4',
+        });
 
         setDownloadUrl(URL.createObjectURL(videoBlob));
         setProgress(100);
         setStatus(`${selectedFormat.toUpperCase()} video ready for download.`);
       }
     } catch (err) {
-      setErrorMsg(err.message || 'Conversion failed. Ensure the DICOM is uncompressed.');
+      setErrorMsg(err.message || 'Conversion failed.');
       setStatus('');
     } finally {
       setIsProcessing(false);
@@ -231,13 +367,12 @@ export default function CardioDicomSaaS() {
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#ffffff', color: '#0f172a', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
       
-      {/* Top Navbar (CoachPro Style) */}
+      {/* Top Navbar */}
       <header style={{ position: 'sticky', top: 0, zIndex: 40, backgroundColor: 'rgba(255,255,255,0.95)', backdropFilter: 'blur(8px)', borderBottom: '1px solid #f1f5f9', padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ fontSize: '20px', fontWeight: '800', letterSpacing: '-0.02em', color: '#0f172a' }}>
           Cardio<span style={{ color: '#0284c7' }}>DICOM</span>
         </div>
 
-        {/* Hamburger Menu Button */}
         <button
           onClick={() => setMenuOpen(true)}
           aria-label="Open menu"
@@ -247,7 +382,7 @@ export default function CardioDicomSaaS() {
         </button>
       </header>
 
-      {/* Slide-out Mobile Drawer (CoachPro Style) */}
+      {/* Slide-out Mobile Drawer */}
       {menuOpen && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', justifyContent: 'flex-end', backgroundColor: 'rgba(15, 23, 42, 0.45)', backdropFilter: 'blur(3px)' }} onClick={() => setMenuOpen(false)}>
           <div style={{ width: '78%', maxWidth: '320px', backgroundColor: '#ffffff', height: '100%', padding: '24px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', boxShadow: '-10px 0 30px rgba(0,0,0,0.15)' }} onClick={(e) => e.stopPropagation()}>
@@ -261,7 +396,6 @@ export default function CardioDicomSaaS() {
 
               <nav style={{ display: 'flex', flexDirection: 'column', gap: '20px', fontSize: '16px', fontWeight: '500', color: '#475569' }}>
                 <a href="#converter" onClick={scrollToConverter} style={{ textDecoration: 'none', color: 'inherit' }}>Converter Tool</a>
-                <a href="#features" onClick={() => setMenuOpen(false)} style={{ textDecoration: 'none', color: 'inherit' }}>Features</a>
                 <a href="#how-it-works" onClick={() => setMenuOpen(false)} style={{ textDecoration: 'none', color: 'inherit' }}>How it works</a>
                 <a href="#security" onClick={() => setMenuOpen(false)} style={{ textDecoration: 'none', color: 'inherit' }}>HIPAA &amp; Privacy</a>
               </nav>
@@ -285,7 +419,7 @@ export default function CardioDicomSaaS() {
         </div>
       )}
 
-      {/* Hero Section (CoachPro White Clean Layout) */}
+      {/* Hero Section */}
       <section style={{ maxWidth: '720px', margin: '0 auto', padding: '44px 20px 32px 20px' }}>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', backgroundColor: '#f0f9ff', border: '1px solid #bae6fd', color: '#0369a1', padding: '6px 14px', borderRadius: '999px', fontSize: '13px', fontWeight: '600', marginBottom: '22px' }}>
           <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#0284c7' }} />
@@ -341,11 +475,10 @@ export default function CardioDicomSaaS() {
               {file ? file.name : 'Tap to Upload DICOM Video or Image (.dcm)'}
             </span>
             <span style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>
-              {file ? `${(file.size / (1024 * 1024)).toFixed(2)} MB • ${dimensions}` : 'Videos → MP4, AVI, MPEG  |  Images → JPEG'}
+              {file ? `${(file.size / (1024 * 1024)).toFixed(2)} MB • ${dimensions} • ${encodingInfo}` : 'Videos → MP4, AVI, MPEG  |  Images → JPEG'}
             </span>
             <input
               type="file"
-              accept=".dcm,application/dicom"
               onChange={handleFileUpload}
               style={{ display: 'none' }}
             />
@@ -442,16 +575,27 @@ export default function CardioDicomSaaS() {
             </div>
           )}
 
-          {/* Preview & Download Button */}
+          {/* Live Video / Image Preview & Download Button */}
           {downloadUrl && (
             <div style={{ marginTop: '18px', paddingTop: '16px', borderTop: '1px solid #e2e8f0' }}>
-              {!isVideo && (
+              {isVideo && selectedFormat === 'mp4' ? (
+                <video
+                  src={downloadUrl}
+                  controls
+                  autoPlay
+                  loop
+                  muted
+                  playsInline
+                  style={{ width: '100%', borderRadius: '10px', marginBottom: '12px', border: '1px solid #cbd5e1', backgroundColor: '#000000' }}
+                />
+              ) : !isVideo ? (
                 <img
                   src={downloadUrl}
                   alt="Converted DICOM preview"
                   style={{ width: '100%', borderRadius: '10px', marginBottom: '12px', border: '1px solid #cbd5e1' }}
                 />
-              )}
+              ) : null}
+
               <a
                 href={downloadUrl}
                 download={`${baseFileName}.${selectedFormat}`}
@@ -482,7 +626,7 @@ export default function CardioDicomSaaS() {
           <h2 style={{ fontSize: '24px', fontWeight: '800', margin: '0 0 24px 0', color: '#0f172a' }}>How it works</h2>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
             <div style={{ backgroundColor: '#ffffff', padding: '20px', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-              <div style={{ fontWeight: '800', color: '#0284c7', marginBottom: '6px' }}>1. Upload .dcm</div>
+              <div style={{ fontWeight: '800', color: '#0284c7', marginBottom: '6px' }}>1. Upload DICOM</div>
               <p style={{ fontSize: '14px', color: '#475569', margin: 0 }}>Select any single-frame DICOM scan or multi-frame echocardiogram loop.</p>
             </div>
             <div style={{ backgroundColor: '#ffffff', padding: '20px', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
@@ -497,7 +641,7 @@ export default function CardioDicomSaaS() {
         </div>
       </section>
 
-      {/* Dark SaaS Footer (CoachPro Style) */}
+      {/* Dark SaaS Footer */}
       <footer id="security" style={{ backgroundColor: '#090d16', color: '#94a3b8', padding: '48px 24px 36px 24px' }}>
         <div style={{ maxWidth: '720px', margin: '0 auto' }}>
           <div style={{ fontSize: '22px', fontWeight: '800', color: '#38bdf8', marginBottom: '12px' }}>
@@ -506,33 +650,6 @@ export default function CardioDicomSaaS() {
           <p style={{ fontSize: '14px', lineHeight: '1.6', maxWidth: '460px', margin: '0 0 32px 0' }}>
             The browser-native platform that helps clinicians, researchers, and imaging labs convert cardiac DICOM files safely — all in one place.
           </p>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: '32px' }}>
-            <div>
-              <div style={{ fontSize: '12px', fontWeight: '700', letterSpacing: '0.08em', color: '#64748b', marginBottom: '14px' }}>PRODUCT</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '14px', color: '#e2e8f0' }}>
-                <a href="#converter" onClick={scrollToConverter} style={{ textDecoration: 'none', color: 'inherit' }}>DICOM Converter</a>
-                <a href="#how-it-works" style={{ textDecoration: 'none', color: 'inherit' }}>How it works</a>
-                <a href="#converter" onClick={scrollToConverter} style={{ textDecoration: 'none', color: 'inherit' }}>Supported Formats</a>
-              </div>
-            </div>
-
-            <div>
-              <div style={{ fontSize: '12px', fontWeight: '700', letterSpacing: '0.08em', color: '#64748b', marginBottom: '14px' }}>ACCOUNT</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '14px', color: '#e2e8f0' }}>
-                <button onClick={() => { setAuthNotice(''); setAuthModal('signup'); }} style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', color: 'inherit', fontSize: '14px', cursor: 'pointer' }}>Get started</button>
-                <button onClick={() => { setAuthNotice(''); setAuthModal('signin'); }} style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', color: 'inherit', fontSize: '14px', cursor: 'pointer' }}>Sign in</button>
-              </div>
-            </div>
-          </div>
-
-          <div style={{ marginBottom: '28px' }}>
-            <div style={{ fontSize: '12px', fontWeight: '700', letterSpacing: '0.08em', color: '#64748b', marginBottom: '14px' }}>LEGAL</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '14px', color: '#e2e8f0' }}>
-              <span>Privacy Policy (Zero Server Storage)</span>
-              <span>Terms of Service</span>
-            </div>
-          </div>
 
           <div style={{ borderTop: '1px solid #1e293b', paddingTop: '24px', textAlign: 'center', fontSize: '13px', color: '#64748b' }}>
             © 2026 CardioDICOM. All rights reserved.
@@ -589,14 +706,6 @@ export default function CardioDicomSaaS() {
                 {authNotice}
               </p>
             )}
-
-            <div style={{ marginTop: '14px', textAlign: 'center', fontSize: '13px', color: '#64748b' }}>
-              {authModal === 'signin' ? (
-                <>Don&apos;t have an account? <button onClick={() => setAuthModal('signup')} style={{ background: 'none', border: 'none', color: '#0284c7', fontWeight: '600', cursor: 'pointer' }}>Start free</button></>
-              ) : (
-                <>Already have an account? <button onClick={() => setAuthModal('signin')} style={{ background: 'none', border: 'none', color: '#0284c7', fontWeight: '600', cursor: 'pointer' }}>Sign in</button></>
-              )}
-            </div>
           </div>
         </div>
       )}
